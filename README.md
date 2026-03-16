@@ -100,6 +100,122 @@ src/
 
 All mutation endpoints require an `X-Idempotency-Key` header (UUID) for replay protection.
 
+## Flow Diagrams
+
+### Registration Flow
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant A as AuthController
+    participant S as AuthService
+    participant DB as PostgreSQL
+    participant M as MailService
+
+    C->>A: POST /auth/register
+    A->>S: register(dto)
+    S->>DB: Check email exists
+    DB-->>S: null (available)
+    S->>S: bcrypt.hash(password, 12)
+    S->>DB: BEGIN TRANSACTION
+    S->>DB: INSERT user
+    S->>DB: INSERT wallet (NGN, balance=0)
+    S->>DB: INSERT otp (6-digit, 10min expiry)
+    S->>DB: COMMIT
+    S-->>M: sendOtp (fire-and-forget)
+    S-->>A: { user_id, email, message }
+    A-->>C: 201 Created
+```
+
+### Wallet Funding Flow
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant I as IdempotencyInterceptor
+    participant W as WalletService
+    participant DB as PostgreSQL
+
+    C->>I: POST /wallet/fund (X-Idempotency-Key)
+    I->>DB: Check idempotency_key exists
+    DB-->>I: null (new request)
+    I->>W: fundWallet(userId, currency, amount)
+    W->>DB: BEGIN TRANSACTION
+    W->>DB: SELECT wallet FOR UPDATE
+    Note over W,DB: Pessimistic lock acquired
+    W->>W: newBalance = balance + amount
+    W->>DB: UPDATE wallet SET balance
+    W->>DB: INSERT transaction
+    W->>DB: COMMIT
+    W-->>C: { transaction_id, new_balance }
+```
+
+### Currency Conversion Flow
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant W as WalletService
+    participant FX as FxService
+    participant R as Redis
+    participant API as ExchangeRate API
+    participant DB as PostgreSQL
+
+    C->>W: convertCurrency(from, to, amount)
+    W->>FX: getRate(from, to)
+    FX->>R: GET fx:{from}:{to}
+    alt Cache hit
+        R-->>FX: cached rate
+    else Cache miss
+        FX->>API: GET /latest/{from}
+        API-->>FX: rates
+        FX->>R: SET fx:{from}:{to} (TTL 5min)
+        FX->>DB: INSERT fx_rate_snapshot
+    end
+    FX-->>W: { rate, source }
+    W->>W: convertedAmount = amount × rate
+    W->>DB: BEGIN TRANSACTION
+    W->>DB: SELECT source_wallet FOR UPDATE (alphabetical order)
+    W->>DB: SELECT target_wallet FOR UPDATE
+    Note over W,DB: Both wallets locked — no deadlock
+    W->>W: Check balance >= amount
+    W->>DB: UPDATE source_wallet (debit)
+    W->>DB: UPDATE target_wallet (credit)
+    W->>DB: INSERT transaction (with rate)
+    W->>DB: COMMIT
+    W-->>C: { from, to, exchange_rate }
+```
+
+### FX Rate Resolution (Three-Tier Fallback)
+```mermaid
+flowchart TD
+    A[Request FX Rate] --> B{Redis Cache?}
+    B -->|Hit| C[Return Cached Rate]
+    B -->|Miss| D{Circuit Breaker State?}
+    D -->|CLOSED / HALF_OPEN| E[Call External API]
+    D -->|OPEN| H[DB Fallback]
+    E -->|Success| F[Cache in Redis + Save Snapshot]
+    F --> G[Return Rate]
+    E -->|Failure| H
+    H -->|Found| I[Return DB Rate]
+    H -->|Empty| J[503 Service Unavailable]
+```
+
+### Trading Flow (with Spread)
+```mermaid
+flowchart TD
+    A[POST /wallet/trade] --> B{Action?}
+    B -->|BUY USD| C[Fetch NGN→USD rate]
+    C --> D[Inverse: 1/rate = USD per NGN]
+    D --> E[Apply markup: rate × 1.015]
+    E --> F[NGN cost = amount × adjusted_rate]
+    B -->|SELL USD| G[Fetch USD→NGN rate]
+    G --> H[Apply markdown: rate × 0.985]
+    H --> I[NGN received = amount × adjusted_rate]
+    F --> J[Execute Trade via WalletService]
+    I --> J
+    J --> K[Lock wallets alphabetically]
+    K --> L[Debit source, credit target]
+    L --> M[Record both raw + spread rates]
+```
+
 ## Key Architectural Decisions
 
 ### 1. Multi-Currency Wallet Model
@@ -202,6 +318,18 @@ npm run migration:revert   # Revert last migration
 - **OTP security**: Invalidates previous OTPs on resend, 10-minute expiry, single-use
 - **Idempotency**: All mutation endpoints require `X-Idempotency-Key` header
 
+## Scaling Considerations
+
+If scaling to millions of users:
+
+- **Database**: Read replicas for transaction history queries. Partition `transactions` table by `created_at` (monthly). Connection pooling via PgBouncer.
+- **Wallet Locking**: Current `SELECT FOR UPDATE` works well under contention because locks are row-level and held briefly. At extreme scale, consider advisory locks or an event-sourced ledger.
+- **FX Rates**: Redis already handles this — a single cached rate serves all users. At scale, promote FX rate fetching to a dedicated worker that refreshes on a schedule rather than on-demand.
+- **Idempotency**: Move idempotency checks from the transactions table to Redis (with TTL) to reduce DB reads on every mutation request.
+- **Horizontal Scaling**: The app is stateless (JWT auth, no sessions). Deploy multiple instances behind a load balancer. Redis is already external.
+- **Rate Limiting**: Move from in-memory throttler to Redis-backed rate limiting for consistency across instances.
+- **Async Processing**: Move email sending to a message queue (e.g., BullMQ backed by Redis) instead of fire-and-forget promises.
+
 ## Bonus Features Implemented
 
 - [x] **Role-based access control (RBAC)**: Admin vs. regular users with dedicated admin endpoints
@@ -212,3 +340,5 @@ npm run migration:revert   # Revert last migration
 - [x] **Health check endpoint**: `/health` with database connectivity check
 - [x] **Docker Compose**: One-command infrastructure setup
 - [x] **Comprehensive test suite**: 38 unit tests across 4 service modules
+- [x] **Flow diagrams**: Mermaid diagrams for registration, funding, conversion, trading, and FX resolution
+- [x] **Scalability documentation**: Detailed scaling strategy for millions of users
