@@ -143,9 +143,13 @@ export class WalletService {
 
       // Identify source and target from the locked wallets
       const sourceWallet =
-        firstWallet.currency === fromCurrency ? firstWallet : secondWallet;
+        firstWallet.currency === String(fromCurrency)
+          ? firstWallet
+          : secondWallet;
       const targetWallet =
-        firstWallet.currency === toCurrency ? firstWallet : secondWallet;
+        firstWallet.currency === String(toCurrency)
+          ? firstWallet
+          : secondWallet;
 
       // Check sufficient balance
       if (!decimal.isGreaterThanOrEqual(sourceWallet.balance, amount)) {
@@ -244,9 +248,13 @@ export class WalletService {
       );
 
       const sourceWallet =
-        firstWallet.currency === fromCurrency ? firstWallet : secondWallet;
+        firstWallet.currency === String(fromCurrency)
+          ? firstWallet
+          : secondWallet;
       const targetWallet =
-        firstWallet.currency === toCurrency ? firstWallet : secondWallet;
+        firstWallet.currency === String(toCurrency)
+          ? firstWallet
+          : secondWallet;
 
       if (!decimal.isGreaterThanOrEqual(sourceWallet.balance, sourceAmount)) {
         throw new BadRequestException(

@@ -9,7 +9,6 @@ import {
   Unique,
   Index,
 } from 'typeorm';
-import { Currency } from '../../../common/enums';
 import { User } from '../../user/entities/user.entity';
 
 @Entity('wallets')
@@ -26,8 +25,8 @@ export class Wallet {
   @JoinColumn({ name: 'user_id' })
   user: User;
 
-  @Column({ type: 'enum', enum: Currency })
-  currency: Currency;
+  @Column({ type: 'varchar', length: 3 })
+  currency: string;
 
   @Column({
     type: 'decimal',

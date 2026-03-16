@@ -7,11 +7,7 @@ import {
   JoinColumn,
   Index,
 } from 'typeorm';
-import {
-  Currency,
-  TransactionType,
-  TransactionStatus,
-} from '../../../common/enums';
+import { TransactionType, TransactionStatus } from '../../../common/enums';
 import { User } from '../../user/entities/user.entity';
 
 @Entity('transactions')
@@ -37,14 +33,14 @@ export class Transaction {
   })
   status: TransactionStatus;
 
-  @Column({ type: 'enum', enum: Currency })
-  source_currency: Currency;
+  @Column({ type: 'varchar', length: 3 })
+  source_currency: string;
 
   @Column({ type: 'decimal', precision: 18, scale: 4 })
   source_amount: string;
 
-  @Column({ type: 'enum', enum: Currency, nullable: true })
-  target_currency: Currency | null;
+  @Column({ type: 'varchar', length: 3, nullable: true })
+  target_currency: string | null;
 
   @Column({ type: 'decimal', precision: 18, scale: 4, nullable: true })
   target_amount: string | null;

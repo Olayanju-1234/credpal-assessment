@@ -5,8 +5,6 @@ import {
   CreateDateColumn,
   Index,
 } from 'typeorm';
-import { Currency } from '../../../common/enums';
-
 @Entity('fx_rate_snapshots')
 @Index('IDX_rate_pair_created', [
   'base_currency',
@@ -17,11 +15,11 @@ export class FxRateSnapshot {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'enum', enum: Currency })
-  base_currency: Currency;
+  @Column({ type: 'varchar', length: 3 })
+  base_currency: string;
 
-  @Column({ type: 'enum', enum: Currency })
-  target_currency: Currency;
+  @Column({ type: 'varchar', length: 3 })
+  target_currency: string;
 
   @Column({ type: 'decimal', precision: 18, scale: 8 })
   rate: string;
