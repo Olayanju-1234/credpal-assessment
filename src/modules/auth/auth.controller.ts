@@ -21,7 +21,7 @@ export class AuthController {
     return this.authService.register(dto);
   }
 
-  @Post('verify-otp')
+  @Post('verify')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify email with OTP code' })
   @ApiResponse({ status: 200, description: 'Email verified' })

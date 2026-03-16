@@ -70,7 +70,7 @@ src/
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | POST | `/auth/register` | No | Register + send OTP email |
-| POST | `/auth/verify-otp` | No | Verify email with 6-digit OTP |
+| POST | `/auth/verify` | No | Verify email with 6-digit OTP |
 | POST | `/auth/resend-otp` | No | Resend verification OTP |
 | POST | `/auth/login` | No | Get JWT access token |
 
@@ -272,7 +272,7 @@ Both the raw rate and applied rate are recorded in the transaction for transpare
 1. **FX API**: Uses [ExchangeRate-API](https://www.exchangerate-api.com) (free tier). The system gracefully degrades to cached/DB rates if the API is down.
 2. **Funding**: Wallet funding is simulated (no payment gateway integration). The `POST /wallet/fund` endpoint directly credits the wallet.
 3. **Spread**: A 1.5% spread is applied on `/wallet/trade` (not on `/wallet/convert`). Configurable via `FX_SPREAD_PERCENT` env var.
-4. **Currency Support**: NGN, USD, EUR, GBP. Extending to new currencies requires only adding to the `Currency` enum and running a migration.
+4. **Currency Support**: NGN, USD, EUR, GBP, CAD, CHF, JPY, AUD, CNY. Extending to new currencies requires only adding to the `Currency` enum and running a migration.
 5. **Email**: OTP delivery uses SMTP. If the email provider is down, registration still succeeds — the email is fire-and-forget with error logging.
 6. **No Payment Gateway**: This is a backend assessment — wallet funding doesn't integrate with Paystack/Flutterwave/etc.
 
