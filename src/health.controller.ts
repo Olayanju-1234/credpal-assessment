@@ -1,4 +1,9 @@
-import { Controller, Get, Inject } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Inject,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import {
   HealthCheck,
@@ -27,7 +32,7 @@ export class HealthController {
       async () => {
         const result = await this.redis.ping();
         if (result !== 'PONG') {
-          throw new Error('Redis ping failed');
+          throw new ServiceUnavailableException('Redis is not responding');
         }
         return { redis: { status: 'up' } };
       },

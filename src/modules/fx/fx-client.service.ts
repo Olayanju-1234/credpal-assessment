@@ -1,6 +1,12 @@
-import { Injectable, Logger, Inject } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  Inject,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
+import { AxiosError } from 'axios';
 import fxConfig from '../../config/fx.config';
 import { Currency } from '../../common/enums';
 
@@ -31,12 +37,32 @@ export class FxClientService {
 
     this.logger.log(`Fetching FX rates from API: ${base}`);
 
-    const { data } = await firstValueFrom(
-      this.httpService.get<ExchangeRateApiResponse>(url, { timeout: 5000 }),
-    );
+    let data: ExchangeRateApiResponse;
+
+    try {
+      const response = await firstValueFrom(
+        this.httpService.get<ExchangeRateApiResponse>(url, { timeout: 5000 }),
+      );
+      data = response.data;
+    } catch (error) {
+      const axiosError = error as AxiosError;
+      if (
+        axiosError.code === 'ECONNABORTED' ||
+        axiosError.code === 'ETIMEDOUT'
+      ) {
+        throw new ServiceUnavailableException(
+          `FX API request timed out for ${base}`,
+        );
+      }
+      throw new ServiceUnavailableException(
+        `FX API is unreachable: ${axiosError.message}`,
+      );
+    }
 
     if (data.result !== 'success') {
-      throw new Error(`FX API error: ${data['error-type'] || 'unknown'}`);
+      throw new ServiceUnavailableException(
+        `FX API returned error: ${data['error-type'] || 'unknown'}`,
+      );
     }
 
     const rates: Record<string, string> = {};
@@ -51,7 +77,9 @@ export class FxClientService {
     const rates = await this.fetchRates(base);
     const rate = rates[target];
     if (!rate) {
-      throw new Error(`Rate not available for ${base}/${target}`);
+      throw new ServiceUnavailableException(
+        `FX rate not available for ${base}/${target}`,
+      );
     }
     return rate;
   }
