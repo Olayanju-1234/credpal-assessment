@@ -11,7 +11,13 @@ import {
 export class RegisterDto {
   @ApiProperty({ example: 'john@example.com' })
   @Transform(({ value }: { value: string }) => value.toLowerCase().trim())
-  @IsEmail()
+  @IsEmail(
+    { allow_ip_domain: false, require_tld: true },
+    { message: 'Please provide a valid email address' },
+  )
+  @Matches(/^[^@]+@[^@]+\.[a-zA-Z]{2,}$/, {
+    message: 'Email must have a valid domain with at least 2-character TLD',
+  })
   email: string;
 
   @ApiProperty({ example: 'SecureP@ss1' })

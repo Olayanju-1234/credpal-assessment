@@ -229,6 +229,13 @@ export class WalletService {
     idempotencyKey: string,
     metadata: Record<string, unknown>,
   ) {
+    if (!decimal.isPositive(sourceAmount)) {
+      throw new BadRequestException('Source amount must be positive');
+    }
+    if (!decimal.isPositive(targetAmount)) {
+      throw new BadRequestException('Target amount must be positive');
+    }
+
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
