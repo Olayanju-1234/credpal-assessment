@@ -1,72 +1,64 @@
-# FX Trading App — Backend
+# FX Trading App Backend
 
-A production-grade backend for an FX Trading application built with NestJS, TypeORM, PostgreSQL, and Redis. Users can register, verify their email, fund multi-currency wallets, convert currencies using real-time FX rates, and trade Naira (NGN) against foreign currencies.
+Backend service for an FX trading platform. Handles user registration with email verification, multi-currency wallets, real-time currency conversion, NGN trading with spread, and transaction history.
 
-## Prerequisites
+Built with NestJS, TypeORM, PostgreSQL, and Redis.
 
-- **Node.js** >= 18
-- **Docker** & **Docker Compose** (for PostgreSQL + Redis)
-- **FX API key** — free at [exchangerate-api.com](https://www.exchangerate-api.com)
-- **SMTP credentials** — Gmail app password or any SMTP provider (for OTP emails)
-
-## Quick Start
+## Setup
 
 ```bash
-# 1. Clone and install
 git clone https://github.com/Olayanju-1234/credpal-assessment.git
 cd credpal-assessment
 npm install
-
-# 2. Start infrastructure (PostgreSQL + Redis)
-docker compose up -d
-
-# 3. Set up environment
-cp .env.example .env
-# Edit .env — add your FX_API_KEY, MAIL_USER, MAIL_PASSWORD
-
-# 4. Run migrations (creates all database tables)
-npm run migration:run
-
-# 5. Start the server
-npm run start:dev
-
-# Swagger docs at http://localhost:3000/api/docs
+docker compose up -d          # starts PostgreSQL and Redis
+cp .env.example .env          # add FX_API_KEY, MAIL_USER, MAIL_PASSWORD
+npm run migration:run         # creates database tables
+npm run start:dev             # http://localhost:3000
 ```
+
+Swagger docs at `http://localhost:3000/api/docs`
+
+**Requirements:** Node.js >= 18, Docker
+
+**Environment variables:**
+- `FX_API_KEY` from [exchangerate-api.com](https://www.exchangerate-api.com) (free tier)
+- `MAIL_USER` and `MAIL_PASSWORD` for SMTP (Gmail app password works)
 
 ## Tech Stack
 
-| Layer | Technology | Why |
-|-------|-----------|-----|
-| Framework | NestJS 10 | Modular, TypeScript-first, production patterns |
-| ORM | TypeORM 0.3 | PostgreSQL support, migrations, query builder |
-| Database | PostgreSQL 16 | DECIMAL precision, `SELECT FOR UPDATE`, JSONB, timestamptz |
-| Cache | Redis 7 | FX rate caching with TTL (5 min) |
-| Auth | JWT (Passport) | Stateless, 15-minute access tokens |
-| Money Math | decimal.js | No floating-point — all amounts as `DECIMAL(18,4)` |
+| Layer | Technology | Rationale |
+|-------|-----------|-----------|
+| Framework | NestJS 10 | Modular, TypeScript-first |
+| ORM | TypeORM 0.3 | Migrations, query builder, `SELECT FOR UPDATE` support |
+| Database | PostgreSQL 16 | DECIMAL precision, row-level locking, JSONB |
+| Cache | Redis 7 | FX rate caching (5-min TTL) |
+| Auth | JWT via Passport | Stateless, 15-min access tokens |
+| Money | decimal.js | All amounts as `DECIMAL(18,4)`, never floats |
 | Docs | Swagger/OpenAPI | Auto-generated from decorators |
-| Email | Nodemailer | SMTP transport (any provider) |
+| Email | Nodemailer | SMTP transport |
 
-## Architecture
+## Project Structure
 
 ```
 src/
 ├── common/
 │   ├── decorators/     @CurrentUser, @VerifiedOnly, @Roles, @IdempotencyKey
 │   ├── guards/         JwtAuthGuard, VerifiedGuard, RolesGuard
-│   ├── interceptors/   IdempotencyInterceptor, ResponseTransformInterceptor
-│   ├── filters/        GlobalExceptionFilter
+│   ├── interceptors/   IdempotencyInterceptor, ActivityLogInterceptor, ResponseTransformInterceptor
+│   ├── filters/        GlobalExceptionFilter (maps 7 PostgreSQL error codes)
 │   ├── enums/          Currency, TransactionType, TransactionStatus, Role
-│   └── utils/          decimal.util.ts (safe arithmetic), lock-order.util.ts
-├── config/             database, redis, jwt, fx, mail (all typed with @nestjs/config)
+│   └── utils/          decimal.util.ts, lock-order.util.ts
+├── config/             database, redis, jwt, fx, mail (typed with @nestjs/config)
 ├── modules/
 │   ├── auth/           Register, verify OTP, resend OTP, login
-│   ├── user/           User entity + service + admin controller
-│   ├── otp/            OTP generation + validation (6-digit, 10-min expiry)
+│   ├── user/           User entity, service, admin controller
+│   ├── otp/            6-digit OTP generation and validation
 │   ├── wallet/         Multi-currency wallets, funding, conversion
-│   ├── trading/        NGN ↔ foreign currency trades with spread
-│   ├── fx/             FX rate fetching, Redis cache, circuit breaker, DB fallback
-│   ├── transaction/    Transaction history with filtering + pagination
-│   └── mail/           Email service (OTP delivery)
+│   ├── trading/        NGN trades with spread
+│   ├── fx/             Rate fetching, Redis cache, circuit breaker, DB fallback
+│   ├── transaction/    Transaction history (paginated, filterable)
+│   ├── activity-log/   Audit trail for all API requests
+│   └── mail/           OTP email delivery
 └── database/
     ├── migrations/
     └── data-source.ts
@@ -77,7 +69,7 @@ src/
 ### Auth
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/auth/register` | No | Register + send OTP email |
+| POST | `/auth/register` | No | Register and send OTP email |
 | POST | `/auth/verify` | No | Verify email with 6-digit OTP |
 | POST | `/auth/resend-otp` | No | Resend verification OTP |
 | POST | `/auth/login` | No | Get JWT access token |
@@ -85,32 +77,139 @@ src/
 ### Wallet
 | Method | Path | Auth | Idempotent | Description |
 |--------|------|------|-----------|-------------|
-| GET | `/wallet` | Verified | — | List all currency balances |
-| POST | `/wallet/fund` | Verified | Yes | Fund wallet in any currency |
+| GET | `/wallet` | Verified | | List all currency balances |
+| POST | `/wallet/fund` | Verified | Yes | Fund wallet in any supported currency |
 | POST | `/wallet/convert` | Verified | Yes | Convert between any two currencies |
-| POST | `/wallet/trade` | Verified | Yes | Trade NGN ↔ foreign currency (with spread) |
+| POST | `/wallet/trade` | Verified | Yes | Trade NGN against foreign currency (with spread) |
 
 ### FX Rates
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/fx/rates?base=NGN&currencies=USD,EUR,GBP` | No | Current FX rates |
+| GET | `/fx/rates?base=NGN&currencies=USD,EUR,GBP` | No | Current exchange rates |
 
 ### Transactions
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/transactions` | Verified | User's transaction history (paginated, filtered) |
 
-### Admin (RBAC)
+### Admin
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/admin/users` | Admin | List all users (paginated) |
+| GET | `/admin/users` | Admin | List all users |
 | GET | `/admin/transactions` | Admin | View all transactions across users |
 
-All mutation endpoints require an `X-Idempotency-Key` header (UUID) for replay protection.
+All mutation endpoints require an `X-Idempotency-Key` header (UUID).
+
+## Architectural Decisions
+
+### Multi-Currency Wallet Model
+One wallet row per `(user_id, currency)` pair with a `UNIQUE` constraint. This gives independent row-level locking per currency, so two operations on different currencies for the same user don't block each other.
+
+### Concurrency Safety
+All balance mutations use `SELECT ... FOR UPDATE` inside database transactions. When a conversion or trade touches two wallets, locks are acquired in alphabetical order by currency code (EUR before GBP before NGN before USD). This prevents deadlocks when concurrent requests convert in opposite directions.
+
+```
+Concurrent NGN→USD and USD→NGN:
+Both acquire: lock(NGN) then lock(USD). No deadlock.
+Without ordering: A locks NGN, B locks USD → deadlock.
+```
+
+### Idempotency (Two Layers)
+1. `IdempotencyInterceptor` checks if the key already exists before processing. Duplicates return the cached result, not an error.
+2. `UNIQUE` constraint on `transactions.idempotency_key` catches concurrent duplicates that slip past the interceptor.
+
+### FX Rate Resilience
+```
+Redis Cache (5-min TTL) → External API (5s timeout) → DB Fallback (latest snapshot)
+```
+A circuit breaker protects the external API: opens after 3 consecutive failures, probes again after 30 seconds. All fetched rates are persisted as snapshots for fallback and audit.
+
+### Financial Arithmetic
+All monetary calculations use `decimal.js` with `ROUND_DOWN`. Amounts are stored as `DECIMAL(18,4)` in PostgreSQL and passed as strings in TypeScript. No floating-point math anywhere.
+
+### Trade Spread
+`/wallet/convert` uses the raw market rate. `/wallet/trade` applies a configurable spread (default 1.5%):
+- BUY foreign currency: rate marked up (× 1.015)
+- SELL foreign currency: rate marked down (× 0.985)
+
+Both the raw rate and the applied rate are recorded in the transaction.
+
+## Database Schema
+
+### Tables
+- **users** - Authentication, roles (USER/ADMIN), email verification status
+- **otps** - 6-digit codes, 10-minute expiry, single-use
+- **wallets** - One per (user, currency), `DECIMAL(18,4)` balance
+- **transactions** - Full ledger (FUNDING, CONVERSION, TRADE) with rates and idempotency keys
+- **fx_rate_snapshots** - Every rate fetched, for fallback and audit
+- **activity_logs** - Request audit trail (user, method, path, IP, status, response time)
+
+### Indexes
+- `UNIQUE(user_id, currency)` on wallets
+- `UNIQUE(idempotency_key)` on transactions
+- `(user_id, created_at DESC)` on transactions
+- `(base_currency, target_currency, created_at DESC)` on fx_rate_snapshots
+- `(user_id, created_at)` on activity_logs
+
+## Assumptions
+
+1. **FX rates** come from [ExchangeRate-API](https://www.exchangerate-api.com) (free tier). The system degrades gracefully to cached or DB rates when the API is unavailable.
+2. **Wallet funding** is simulated. `POST /wallet/fund` directly credits the wallet without a payment gateway.
+3. **Spread** is configurable via `FX_SPREAD_PERCENT` env var (default 1.5%).
+4. **Supported currencies**: NGN, USD, EUR, GBP, CAD, CHF, JPY, AUD, CNY. Currency columns use `varchar(3)` instead of database enums, so adding a new currency only requires a one-line TypeScript change.
+5. **Email delivery** is fire-and-forget. If SMTP is down, registration still succeeds.
+
+## Tests
+
+```bash
+npm run test          # unit tests
+npm run test:watch    # watch mode
+npm run test:cov      # coverage report
+```
+
+39 unit tests across 4 services:
+- **AuthService** (12): Registration, OTP verification, login, error paths
+- **WalletService** (11): Funding, conversion math, insufficient balance, decimal precision
+- **TradingService** (7): Spread calculation (BUY/SELL), NGN enforcement, validation
+- **FxService** (9): Cache hit/miss, circuit breaker states, DB fallback
+
+## Security
+
+- Passwords hashed with bcrypt (12 salt rounds)
+- 15-minute JWT access tokens
+- Rate limiting: 3-5 req/min on auth, 30/min globally
+- Input validation with `class-validator` (whitelist + forbidNonWhitelisted)
+- Login responses never reveal whether email or password was wrong
+- Admin endpoints guarded by `@Roles(Role.ADMIN)`
+- OTPs are single-use, expire in 10 minutes, invalidated on resend
+- All mutations require `X-Idempotency-Key`
+- Activity logging on every request (user, IP, user agent, response time)
+
+## Scaling Path
+
+- **Database**: Read replicas for history queries. Partition transactions by month. PgBouncer for connection pooling.
+- **Wallet locking**: Row-level locks are held briefly and work well under contention. At extreme scale, advisory locks or event sourcing could replace them.
+- **FX rates**: Redis already serves a single cached rate to all users. At scale, a dedicated worker refreshing on a schedule would replace on-demand fetching.
+- **Idempotency**: Move checks to Redis (with TTL) to reduce DB reads on every mutation.
+- **Horizontal scaling**: The app is stateless (JWT, no sessions). Multiple instances behind a load balancer, Redis already external.
+- **Rate limiting**: Move from in-memory throttler to Redis-backed for consistency across instances.
+- **Email**: Replace fire-and-forget with a message queue (BullMQ).
+
+## Scripts
+
+```bash
+npm run start:dev          # dev mode with hot reload
+npm run start:prod         # production mode
+npm run build              # compile TypeScript
+npm run test               # run unit tests
+npm run migration:generate # generate a new migration
+npm run migration:run      # run pending migrations
+npm run migration:revert   # revert last migration
+```
 
 ## Flow Diagrams
 
-### Registration Flow
+### Registration
 ```mermaid
 sequenceDiagram
     participant C as Client
@@ -134,7 +233,7 @@ sequenceDiagram
     A-->>C: 201 Created
 ```
 
-### Wallet Funding Flow
+### Wallet Funding
 ```mermaid
 sequenceDiagram
     participant C as Client
@@ -156,7 +255,7 @@ sequenceDiagram
     W-->>C: { transaction_id, new_balance }
 ```
 
-### Currency Conversion Flow
+### Currency Conversion
 ```mermaid
 sequenceDiagram
     participant C as Client
@@ -182,7 +281,7 @@ sequenceDiagram
     W->>DB: BEGIN TRANSACTION
     W->>DB: SELECT source_wallet FOR UPDATE (alphabetical order)
     W->>DB: SELECT target_wallet FOR UPDATE
-    Note over W,DB: Both wallets locked — no deadlock
+    Note over W,DB: Both wallets locked, no deadlock
     W->>W: Check balance >= amount
     W->>DB: UPDATE source_wallet (debit)
     W->>DB: UPDATE target_wallet (credit)
@@ -191,7 +290,7 @@ sequenceDiagram
     W-->>C: { from, to, exchange_rate }
 ```
 
-### FX Rate Resolution (Three-Tier Fallback)
+### FX Rate Resolution
 ```mermaid
 flowchart TD
     A[Request FX Rate] --> B{Redis Cache?}
@@ -206,147 +305,20 @@ flowchart TD
     H -->|Empty| J[503 Service Unavailable]
 ```
 
-### Trading Flow (with Spread)
+### Trading (with Spread)
 ```mermaid
 flowchart TD
     A[POST /wallet/trade] --> B{Action?}
-    B -->|BUY USD| C[Fetch NGN→USD rate]
+    B -->|BUY USD| C[Fetch NGN to USD rate]
     C --> D[Inverse: 1/rate = USD per NGN]
-    D --> E[Apply markup: rate × 1.015]
-    E --> F[NGN cost = amount × adjusted_rate]
-    B -->|SELL USD| G[Fetch USD→NGN rate]
-    G --> H[Apply markdown: rate × 0.985]
-    H --> I[NGN received = amount × adjusted_rate]
+    D --> E[Apply markup: rate x 1.015]
+    E --> F[NGN cost = amount x adjusted_rate]
+    B -->|SELL USD| G[Fetch USD to NGN rate]
+    G --> H[Apply markdown: rate x 0.985]
+    H --> I[NGN received = amount x adjusted_rate]
     F --> J[Execute Trade via WalletService]
     I --> J
     J --> K[Lock wallets alphabetically]
     K --> L[Debit source, credit target]
     L --> M[Record both raw + spread rates]
 ```
-
-## Key Architectural Decisions
-
-### 1. Multi-Currency Wallet Model
-One wallet row per `(user_id, currency)` pair with a `UNIQUE` constraint. This allows independent row-level locking per currency — two operations on different currencies for the same user don't block each other.
-
-### 2. Concurrency Safety — Pessimistic Locking
-All balance mutations use `SELECT ... FOR UPDATE` via TypeORM's `QueryRunner` inside database transactions. This prevents double-spending at the database level.
-
-**Deadlock Prevention:** When a conversion/trade touches two wallets, locks are always acquired in alphabetical order by currency code (EUR < GBP < NGN < USD). This eliminates deadlocks when concurrent requests convert in opposite directions.
-
-```
-Example: Concurrent NGN→USD and USD→NGN
-Both acquire: lock(NGN) → lock(USD)  ✓  No deadlock.
-Without ordering: A locks NGN, B locks USD → deadlock.
-```
-
-### 3. Idempotency — Two Layers
-- **Application layer:** `IdempotencyInterceptor` checks if the `X-Idempotency-Key` already exists in the transactions table before processing. Duplicate requests return the cached result (not an error) — true idempotency.
-- **Database layer:** `UNIQUE` constraint on `transactions.idempotency_key` is the ultimate safety net for concurrent duplicate requests that pass the interceptor simultaneously.
-
-### 4. FX Rate Resilience — Three-Tier Resolution
-```
-Redis Cache (5-min TTL) → External API (5s timeout) → DB Fallback (latest snapshot)
-```
-A circuit breaker protects the external API: opens after 3 consecutive failures, transitions to half-open after 30 seconds to allow a probe request. All rate snapshots are persisted for audit and fallback.
-
-### 5. Financial-Grade Arithmetic
-All monetary calculations use `decimal.js` with `ROUND_DOWN` mode. Amounts are stored as `DECIMAL(18,4)` in PostgreSQL and handled as `string` in TypeScript — never JavaScript `number`. This eliminates floating-point errors (e.g., `0.1 + 0.2 !== 0.3`).
-
-### 6. Trade Spread
-`/wallet/convert` uses the raw market rate. `/wallet/trade` applies a configurable spread (default 1.5%):
-- **BUY** foreign currency: user pays more NGN (rate × 1.015)
-- **SELL** foreign currency: user receives less NGN (rate × 0.985)
-
-Both the raw rate and applied rate are recorded in the transaction for transparency.
-
-## Database Schema
-
-### Core Tables
-- **users** — Authentication, roles (USER/ADMIN), email verification status
-- **otps** — 6-digit OTP codes with 10-minute expiry, single-use
-- **wallets** — One per (user, currency) pair, `DECIMAL(18,4)` balance
-- **transactions** — Ledger of all actions (FUNDING, CONVERSION, TRADE) with rates and idempotency keys
-- **fx_rate_snapshots** — Audit trail of all FX rates fetched (for fallback + compliance)
-
-### Key Indexes
-- `UNIQUE(user_id, currency)` on wallets — one wallet per currency per user
-- `UNIQUE(idempotency_key)` on transactions — replay protection
-- `(user_id, created_at DESC)` on transactions — paginated history
-- `(base_currency, target_currency, created_at DESC)` on fx_rate_snapshots — fast fallback
-
-## Key Assumptions
-
-1. **FX API**: Uses [ExchangeRate-API](https://www.exchangerate-api.com) (free tier). The system gracefully degrades to cached/DB rates if the API is down.
-2. **Funding**: Wallet funding is simulated (no payment gateway integration). The `POST /wallet/fund` endpoint directly credits the wallet.
-3. **Spread**: A 1.5% spread is applied on `/wallet/trade` (not on `/wallet/convert`). Configurable via `FX_SPREAD_PERCENT` env var.
-4. **Currency Support**: NGN, USD, EUR, GBP, CAD, CHF, JPY, AUD, CNY out of the box. Database columns use `varchar(3)` (not PostgreSQL enums), so adding a new currency is a one-line change to the TypeScript `Currency` enum — no migration needed.
-5. **Email**: OTP delivery uses SMTP. If the email provider is down, registration still succeeds — the email is fire-and-forget with error logging.
-6. **No Payment Gateway**: This is a backend assessment — wallet funding doesn't integrate with Paystack/Flutterwave/etc.
-
-## Running Tests
-
-```bash
-# Unit tests
-npm run test
-
-# Watch mode
-npm run test:watch
-
-# Coverage
-npm run test:cov
-```
-
-Test coverage includes:
-- **AuthService** (12 tests): Registration, OTP verification, login, error cases
-- **WalletService** (11 tests): Funding, conversion math, insufficient balance, decimal precision
-- **TradingService** (7 tests): Spread calculation (BUY/SELL), NGN enforcement, validation
-- **FxService** (9 tests): Cache hit/miss, circuit breaker states, DB fallback, unavailability
-
-## Scripts
-
-```bash
-npm run start:dev          # Development mode with hot reload
-npm run start:prod         # Production mode
-npm run build              # Compile TypeScript
-npm run test               # Run unit tests
-npm run migration:generate # Generate a new migration
-npm run migration:run      # Run pending migrations
-npm run migration:revert   # Revert last migration
-```
-
-## Security Measures
-
-- **Password hashing**: bcrypt with 12 salt rounds
-- **JWT**: 15-minute access tokens, secret via environment variable
-- **Rate limiting**: 3-5 requests/minute on auth endpoints, 30/minute globally
-- **Input validation**: `class-validator` with whitelist (strips unknown fields) + `forbidNonWhitelisted` (rejects unknown fields)
-- **Error messages**: Login never reveals whether email or password was wrong
-- **RBAC**: Admin-only endpoints guarded by `@Roles(Role.ADMIN)` with `RolesGuard`
-- **OTP security**: Invalidates previous OTPs on resend, 10-minute expiry, single-use
-- **Idempotency**: All mutation endpoints require `X-Idempotency-Key` header
-
-## Scaling Considerations
-
-If scaling to millions of users:
-
-- **Database**: Read replicas for transaction history queries. Partition `transactions` table by `created_at` (monthly). Connection pooling via PgBouncer.
-- **Wallet Locking**: Current `SELECT FOR UPDATE` works well under contention because locks are row-level and held briefly. At extreme scale, consider advisory locks or an event-sourced ledger.
-- **FX Rates**: Redis already handles this — a single cached rate serves all users. At scale, promote FX rate fetching to a dedicated worker that refreshes on a schedule rather than on-demand.
-- **Idempotency**: Move idempotency checks from the transactions table to Redis (with TTL) to reduce DB reads on every mutation request.
-- **Horizontal Scaling**: The app is stateless (JWT auth, no sessions). Deploy multiple instances behind a load balancer. Redis is already external.
-- **Rate Limiting**: Move from in-memory throttler to Redis-backed rate limiting for consistency across instances.
-- **Async Processing**: Move email sending to a message queue (e.g., BullMQ backed by Redis) instead of fire-and-forget promises.
-
-## Bonus Features Implemented
-
-- [x] **Role-based access control (RBAC)**: Admin vs. regular users with dedicated admin endpoints
-- [x] **Redis caching**: FX rates cached with configurable TTL
-- [x] **Idempotency / Transaction verification**: Duplicate detection via header + DB constraint
-- [x] **Circuit breaker**: Protects against FX API failures with automatic recovery
-- [x] **Spread on trades**: Configurable margin on NGN trading pairs
-- [x] **Health check endpoint**: `/health` with database connectivity check
-- [x] **Docker Compose**: One-command infrastructure setup
-- [x] **Comprehensive test suite**: 39 unit tests across 4 service modules
-- [x] **Flow diagrams**: Mermaid diagrams for registration, funding, conversion, trading, and FX resolution
-- [x] **Scalability documentation**: Detailed scaling strategy for millions of users
