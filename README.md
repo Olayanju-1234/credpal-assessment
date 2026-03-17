@@ -2,11 +2,19 @@
 
 A production-grade backend for an FX Trading application built with NestJS, TypeORM, PostgreSQL, and Redis. Users can register, verify their email, fund multi-currency wallets, convert currencies using real-time FX rates, and trade Naira (NGN) against foreign currencies.
 
+## Prerequisites
+
+- **Node.js** >= 18
+- **Docker** & **Docker Compose** (for PostgreSQL + Redis)
+- **FX API key** — free at [exchangerate-api.com](https://www.exchangerate-api.com)
+- **SMTP credentials** — Gmail app password or any SMTP provider (for OTP emails)
+
 ## Quick Start
 
 ```bash
 # 1. Clone and install
-git clone <repo-url> && cd credpal-assessment
+git clone https://github.com/Olayanju-1234/credpal-assessment.git
+cd credpal-assessment
 npm install
 
 # 2. Start infrastructure (PostgreSQL + Redis)
@@ -14,9 +22,9 @@ docker compose up -d
 
 # 3. Set up environment
 cp .env.example .env
-# Edit .env with your FX API key (get one free at https://www.exchangerate-api.com)
+# Edit .env — add your FX_API_KEY, MAIL_USER, MAIL_PASSWORD
 
-# 4. Run migrations
+# 4. Run migrations (creates all database tables)
 npm run migration:run
 
 # 5. Start the server
@@ -233,7 +241,7 @@ Without ordering: A locks NGN, B locks USD → deadlock.
 ```
 
 ### 3. Idempotency — Two Layers
-- **Application layer:** `IdempotencyInterceptor` checks if the `X-Idempotency-Key` already exists in the transactions table before processing.
+- **Application layer:** `IdempotencyInterceptor` checks if the `X-Idempotency-Key` already exists in the transactions table before processing. Duplicate requests return the cached result (not an error) — true idempotency.
 - **Database layer:** `UNIQUE` constraint on `transactions.idempotency_key` is the ultimate safety net for concurrent duplicate requests that pass the interceptor simultaneously.
 
 ### 4. FX Rate Resilience — Three-Tier Resolution
@@ -291,7 +299,7 @@ npm run test:cov
 
 Test coverage includes:
 - **AuthService** (12 tests): Registration, OTP verification, login, error cases
-- **WalletService** (10 tests): Funding, conversion math, insufficient balance, decimal precision
+- **WalletService** (11 tests): Funding, conversion math, insufficient balance, decimal precision
 - **TradingService** (7 tests): Spread calculation (BUY/SELL), NGN enforcement, validation
 - **FxService** (9 tests): Cache hit/miss, circuit breaker states, DB fallback, unavailability
 
@@ -339,6 +347,6 @@ If scaling to millions of users:
 - [x] **Spread on trades**: Configurable margin on NGN trading pairs
 - [x] **Health check endpoint**: `/health` with database connectivity check
 - [x] **Docker Compose**: One-command infrastructure setup
-- [x] **Comprehensive test suite**: 38 unit tests across 4 service modules
+- [x] **Comprehensive test suite**: 39 unit tests across 4 service modules
 - [x] **Flow diagrams**: Mermaid diagrams for registration, funding, conversion, trading, and FX resolution
 - [x] **Scalability documentation**: Detailed scaling strategy for millions of users
