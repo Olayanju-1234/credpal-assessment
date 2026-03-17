@@ -5,13 +5,14 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { DataSource } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { AuthService } from './auth.service';
 import { UserService } from '../user/user.service';
 import { OtpService } from '../otp/otp.service';
 import { MailService } from '../mail/mail.service';
-import { WalletService } from '../wallet/wallet.service';
-import { Currency, Role } from '../../common/enums';
+import { Role } from '../../common/enums';
+import jwtConfig from '../../config/jwt.config';
 
 jest.mock('bcrypt');
 const mockedBcrypt = bcrypt as jest.Mocked<typeof bcrypt>;
@@ -22,12 +23,12 @@ describe('AuthService', () => {
   const mockUserService = {
     findByEmail: jest.fn(),
     findByEmailWithPassword: jest.fn(),
-    create: jest.fn(),
     markEmailVerified: jest.fn(),
   };
 
   const mockOtpService = {
     generate: jest.fn(),
+    generateCode: jest.fn(),
     verify: jest.fn(),
   };
 
@@ -35,12 +36,30 @@ describe('AuthService', () => {
     sendOtp: jest.fn(),
   };
 
-  const mockWalletService = {
-    createWallet: jest.fn(),
-  };
-
   const mockJwtService = {
     sign: jest.fn(),
+  };
+
+  // QueryRunner mock for atomic registration
+  const mockQueryRunner = {
+    connect: jest.fn(),
+    startTransaction: jest.fn(),
+    commitTransaction: jest.fn(),
+    rollbackTransaction: jest.fn(),
+    release: jest.fn(),
+    manager: {
+      create: jest.fn(),
+      save: jest.fn(),
+    },
+  };
+
+  const mockDataSource = {
+    createQueryRunner: jest.fn().mockReturnValue(mockQueryRunner),
+  };
+
+  const mockJwtConf = {
+    secret: 'test-secret',
+    expiresIn: '15m',
   };
 
   beforeEach(async () => {
@@ -52,8 +71,9 @@ describe('AuthService', () => {
         { provide: UserService, useValue: mockUserService },
         { provide: OtpService, useValue: mockOtpService },
         { provide: MailService, useValue: mockMailService },
-        { provide: WalletService, useValue: mockWalletService },
         { provide: JwtService, useValue: mockJwtService },
+        { provide: DataSource, useValue: mockDataSource },
+        { provide: jwtConfig.KEY, useValue: mockJwtConf },
       ],
     }).compile();
 
@@ -68,22 +88,17 @@ describe('AuthService', () => {
       last_name: 'Doe',
     };
 
-    it('should create user, generate OTP, create wallet, and return user_id', async () => {
+    it('should atomically create user, wallet, and OTP then send email', async () => {
       mockUserService.findByEmail.mockResolvedValue(null);
       (mockedBcrypt.hash as jest.Mock).mockResolvedValue('hashed-password');
-      mockUserService.create.mockResolvedValue({
-        id: 'user-1',
-        email: 'john@example.com',
-        first_name: 'John',
-        last_name: 'Doe',
-        role: Role.USER,
-      });
-      mockWalletService.createWallet.mockResolvedValue({
-        id: 'wallet-1',
-        currency: Currency.NGN,
-      });
-      mockOtpService.generate.mockResolvedValue('482910');
-      mockMailService.sendOtp.mockResolvedValue(undefined);
+      mockOtpService.generateCode.mockReturnValue('482910');
+
+      const savedUser = { id: 'user-1', email: 'john@example.com' };
+      mockQueryRunner.manager.create.mockReturnValue({});
+      mockQueryRunner.manager.save
+        .mockResolvedValueOnce(savedUser) // user
+        .mockResolvedValueOnce({}) // wallet
+        .mockResolvedValueOnce({}); // otp
 
       const result = await service.register(registerDto);
 
@@ -91,22 +106,12 @@ describe('AuthService', () => {
       expect(result.email).toBe('john@example.com');
       expect(result.message).toContain('Registration successful');
 
-      // Verify user creation with hashed password
-      expect(mockUserService.create).toHaveBeenCalledWith({
-        email: 'john@example.com',
-        password: 'hashed-password',
-        first_name: 'John',
-        last_name: 'Doe',
-      });
+      // Verify atomic transaction
+      expect(mockQueryRunner.startTransaction).toHaveBeenCalled();
+      expect(mockQueryRunner.commitTransaction).toHaveBeenCalled();
+      expect(mockQueryRunner.release).toHaveBeenCalled();
 
-      // Verify default NGN wallet creation
-      expect(mockWalletService.createWallet).toHaveBeenCalledWith(
-        'user-1',
-        Currency.NGN,
-      );
-
-      // Verify OTP generation and email
-      expect(mockOtpService.generate).toHaveBeenCalledWith('user-1');
+      // Verify email sent AFTER commit
       expect(mockMailService.sendOtp).toHaveBeenCalledWith(
         'john@example.com',
         '482910',
@@ -116,12 +121,12 @@ describe('AuthService', () => {
     it('should hash password with salt rounds of 12', async () => {
       mockUserService.findByEmail.mockResolvedValue(null);
       (mockedBcrypt.hash as jest.Mock).mockResolvedValue('hashed');
-      mockUserService.create.mockResolvedValue({
+      mockOtpService.generateCode.mockReturnValue('123456');
+      mockQueryRunner.manager.create.mockReturnValue({});
+      mockQueryRunner.manager.save.mockResolvedValue({
         id: 'user-2',
-        email: 'test@example.com',
+        email: 'john@example.com',
       });
-      mockWalletService.createWallet.mockResolvedValue({});
-      mockOtpService.generate.mockResolvedValue('123456');
 
       await service.register(registerDto);
 
@@ -141,9 +146,20 @@ describe('AuthService', () => {
         'Email already registered',
       );
 
-      // Should not create user or wallet
-      expect(mockUserService.create).not.toHaveBeenCalled();
-      expect(mockWalletService.createWallet).not.toHaveBeenCalled();
+      // Should not start a transaction
+      expect(mockQueryRunner.startTransaction).not.toHaveBeenCalled();
+    });
+
+    it('should rollback transaction on error', async () => {
+      mockUserService.findByEmail.mockResolvedValue(null);
+      (mockedBcrypt.hash as jest.Mock).mockResolvedValue('hashed');
+      mockQueryRunner.manager.create.mockReturnValue({});
+      mockQueryRunner.manager.save.mockRejectedValue(new Error('DB error'));
+
+      await expect(service.register(registerDto)).rejects.toThrow('DB error');
+
+      expect(mockQueryRunner.rollbackTransaction).toHaveBeenCalled();
+      expect(mockQueryRunner.release).toHaveBeenCalled();
     });
   });
 
@@ -192,7 +208,7 @@ describe('AuthService', () => {
       ).rejects.toThrow(BadRequestException);
       await expect(
         service.verifyOtp({ email: 'nobody@example.com', code: '123456' }),
-      ).rejects.toThrow('Invalid email or OTP');
+      ).rejects.toThrow('Invalid or expired OTP');
     });
 
     it('should throw BadRequestException if email already verified', async () => {

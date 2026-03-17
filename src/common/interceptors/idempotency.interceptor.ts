@@ -4,9 +4,8 @@ import {
   ExecutionContext,
   CallHandler,
   BadRequestException,
-  ConflictException,
 } from '@nestjs/common';
-import { Observable } from 'rxjs';
+import { Observable, of } from 'rxjs';
 import { DataSource } from 'typeorm';
 import { Transaction } from '../../modules/transaction/entities/transaction.entity';
 
@@ -35,9 +34,10 @@ export class IdempotencyInterceptor implements NestInterceptor {
     });
 
     if (existing) {
-      throw new ConflictException({
+      return of({
         message: 'Request already processed',
         transaction_id: existing.id,
+        idempotent: true,
       });
     }
 
