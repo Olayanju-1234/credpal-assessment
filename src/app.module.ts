@@ -19,6 +19,8 @@ import { TransactionModule } from './modules/transaction/transaction.module';
 import { MailModule } from './modules/mail/mail.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { ResponseTransformInterceptor } from './common/interceptors/response-transform.interceptor';
+import { ActivityLogInterceptor } from './common/interceptors/activity-log.interceptor';
+import { ActivityLogModule } from './modules/activity-log/activity-log.module';
 import { HealthController } from './health.controller';
 
 @Module({
@@ -44,11 +46,13 @@ import { HealthController } from './health.controller';
     FxModule,
     TransactionModule,
     MailModule,
+    ActivityLogModule,
   ],
   controllers: [HealthController],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_INTERCEPTOR, useClass: ResponseTransformInterceptor },
+    { provide: APP_INTERCEPTOR, useClass: ActivityLogInterceptor },
     { provide: APP_FILTER, useClass: GlobalExceptionFilter },
   ],
 })
